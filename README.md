@@ -8,7 +8,7 @@ Nothing ever leaves your computer.
 
 ## Planned features
 - [x] Face detection and embeddings (InsightFace)
-- [ ] Incremental photo indexing
+- [x] Incremental photo indexing
 - [ ] Clustering faces into people
 - [ ] Streamlit app to name, merge and search people
 - [ ] Live camera with tracking and recognition
