@@ -66,7 +66,7 @@ class FaceDB:
     def __init__(self, path="facevault.db"):
         self.path = Path(path)
         self.conn = sqlite3.connect(self.path)
-        self.conn.row_factory = sqlite3.Row          # rows behave like dicts
+        self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys = ON")
         self.conn.executescript(SCHEMA)
 
@@ -106,6 +106,24 @@ class FaceDB:
                 (photo_id, x1, y1, x2, y2, float(score), embedding_to_blob(embedding)),
             )
         return cur.lastrowid
+
+    def add_photo_with_faces(self, path, sha1, faces, taken_at=None,
+                             width=None, height=None) -> int:
+        """Save a photo and all its faces in one transaction (all or nothing)."""
+        with self.conn:
+            cur = self.conn.execute(
+                "INSERT INTO photos (path, sha1, taken_at, width, height) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (str(path), sha1, taken_at, width, height),
+            )
+            photo_id = cur.lastrowid
+            self.conn.executemany(
+                "INSERT INTO faces (photo_id, x1, y1, x2, y2, score, embedding) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                [(photo_id, *f.bbox, float(f.score), embedding_to_blob(f.embedding))
+                 for f in faces],
+            )
+        return photo_id
 
     def all_embeddings(self):
         """Return (face_ids, matrix) where each row of the matrix is one embedding."""
