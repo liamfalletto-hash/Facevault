@@ -231,3 +231,6 @@ Thumbs.db
 
 output/
 *.db-*
+
+debug_clusters/
+faces_db/
