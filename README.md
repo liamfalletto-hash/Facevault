@@ -43,54 +43,79 @@ python -m facevault.cluster export                # save sample crops per cluste
 
 ### Results
 
-Tested on a subset of the [LFW dataset](http://vis-www.cs.umass.edu/lfw/):
-100 people, up to 20 photos each, 1,063 detected faces.
+## Evaluation
 
-**Tuning DBSCAN's `eps`**
+Accuracy is measured on a subset of the [LFW dataset](http://vis-www.cs.umass.edu/lfw/):
+100 people with up to 20 photos each (938 photos). Because LFW photos are labeled
+with the person's name, every cluster can be checked against the true identity.
+For each photo, the largest detected face is taken as the labeled face (931
+faces; background faces are excluded).
 
-| eps  | Clusters | Noise faces |
-|------|----------|-------------|
-| 0.35 | 99       | 231         |
-| 0.40 | 100      | 173         |
-| 0.45 | 101      | 147         |
-| 0.50 | 101      | 136         |
-| 0.55 | 101      | 135         |
-| 0.60 | 102      | 130         |
+```bash
+python -m facevault.evaluate
+```
 
-`eps` is the maximum distance at which two faces count as neighbours. Across
-the tested range the number of clusters stays within 99 to 102 for 100 true
-identities, so the result is stable. Noise falls quickly up to 0.50 and then
-levels off, so 0.50 was chosen: larger values recover almost no extra faces
-while raising the risk of merging different people.
+### Metrics
 
-**DBSCAN vs HDBSCAN**
+- **Pairwise precision**: of all pairs of faces placed in the same cluster, the
+  share that really are the same person. Low precision means different people
+  were merged.
+- **Pairwise recall**: of all true same-person pairs, the share that ended up
+  in the same cluster. Low recall means a person was split up or left as noise.
+- **Adjusted Rand Index (ARI)**: overall agreement between the clusters and the
+  true identities (1.0 = perfect, 0 = random).
 
-| Method              | Clusters | Noise faces | Noise share |
-|---------------------|----------|-------------|-------------|
-| DBSCAN (eps = 0.50) | 101      | 136         | 12.8%       |
-| HDBSCAN             | 103      | 111         | 10.4%       |
+### Choosing `eps`
 
-Agreement between the two methods (adjusted Rand index): 0.875
+![Clustering quality vs eps](docs/eps_tuning.png)
 
-Both methods recover close to the true number of identities and largely agree
-with each other. HDBSCAN needs no `eps` tuning and assigns more faces to a
-cluster, at the cost of slightly more clusters than there are people, which
-suggests a few identities are split. FaceVault uses DBSCAN with `eps = 0.50` by
-default, since its cluster count is closest to the true 100, and offers HDBSCAN
-through `--method hdbscan`.
+| eps   | Clusters | Noise | Precision | Recall | F1    | ARI   |
+|-------|----------|-------|-----------|--------|-------|-------|
+| 0.30  | 82       | 248   | 1.000     | 0.711  | 0.831 | 0.829 |
+| 0.40  | 99       | 46    | 1.000     | 0.935  | 0.967 | 0.966 |
+| 0.50  | 100      | 9     | 1.000     | 0.988  | 0.994 | 0.994 |
+| **0.60** | **100** | **6** | **1.000** | **0.995** | **0.998** | **0.998** |
+| 0.65  | 100      | 5     | 1.000     | 0.998  | 0.999 | 0.999 |
+| 0.70  | 94       | 5     | 0.882     | 0.998  | 0.937 | 0.936 |
+
+Precision stays at 1.000 up to `eps = 0.65`: no two different people are ever
+merged. Increasing `eps` only improves recall, recovering faces that would
+otherwise be split off or treated as noise. Beyond 0.65 precision falls sharply
+as distinct identities start to merge.
+
+The highest F1 is at 0.625, but FaceVault uses **`eps = 0.60`** by default: it
+scores almost identically (F1 0.998) while staying further from the point where
+identities merge, which leaves a safety margin for harder, real-world photos.
+
+### DBSCAN vs HDBSCAN
+
+| Method              | Clusters | Noise | Precision | Recall | F1    | ARI   | Time   |
+|---------------------|----------|-------|-----------|--------|-------|-------|--------|
+| DBSCAN (eps = 0.625)| 100      | 5     | 1.000     | 0.998  | 0.999 | 0.999 | 0.01 s |
+| HDBSCAN             | 100      | 4     | 0.996     | 0.998  | 0.997 | 0.997 | 0.32 s |
+
+Both methods recover all 100 identities. HDBSCAN reaches nearly the same
+accuracy with no parameter to tune, which makes it a good fallback for new
+photo collections; DBSCAN is slightly more precise and about 30x faster.
+
+### Speed
+
+Measured on a MacBook Air (CPU only):
+
+| Step                               | Throughput                         |
+|------------------------------------|------------------------------------|
+| Indexing (detection + embedding)   | 11.7 photos/s (938 photos in 80.5 s) |
+| Clustering (DBSCAN, 931 faces)     | 0.01 s                             |
+
+Indexing is the bottleneck; clustering is effectively instant at this scale.
 
 ### Limitations
 
-- These figures compare cluster counts, not per-face accuracy: a matching
-  count does not guarantee every cluster contains a single person.
-- A cluster needs at least 3 faces, so people with fewer photos are treated as
-  noise. Part of the remaining noise is background faces in the photos.
-- Profile shots, heavy occlusion and low-resolution faces are the most common
-  source of errors.
-- The best `eps` depends on the embedding model and the photo collection, so it
-  should be re-tuned on new data.
-
-### Privacy
-
-Everything runs locally. The photo folders, the database and the exported
-sample crops are excluded from version control.
+- LFW is an easy benchmark: mostly frontal, well-lit, centred faces of public
+  figures. Accuracy on personal photo libraries (profiles, poor lighting,
+  children, low resolution) will be lower.
+- `eps` was chosen on the same data it is evaluated on, so these scores are
+  slightly optimistic. A held-out set of different identities would give a
+  fairer estimate.
+- A cluster needs at least 3 faces, so people with fewer photos are left as
+  noise.
