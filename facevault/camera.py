@@ -1,38 +1,48 @@
-"""Phase 7: live webcam loop with face detection and an FPS counter."""
+"""Live webcam loop: detection, tracking and per-track recognition."""
 import argparse
 import time
-import numpy as np
-from facevault.tracker import IoUTracker
+
 import cv2
+import numpy as np
 from insightface.app import FaceAnalysis
 
+from facevault.recognizer import UNKNOWN, Recognizer
+from facevault.tracker import IoUTracker
 
-def load_detector(det_size=320):
-    """Detection only for now: much faster than also computing embeddings."""
+GREEN = (0, 200, 0)   # OpenCV colours are BGR
+RED = (0, 0, 230)
+
+
+def load_analyzer(det_size=320):
+    """Same model as the indexer (buffalo_l) so embeddings are comparable."""
     app = FaceAnalysis(
         name="buffalo_l",
-        allowed_modules=["detection"],
+        allowed_modules=["detection", "recognition"],
         providers=["CPUExecutionProvider"],
     )
     app.prepare(ctx_id=-1, det_size=(det_size, det_size))
     return app
 
 
-def detect(app, frame):
-    """Return a list of (x1, y1, x2, y2, score) for each face in the frame."""
-    out = []
+def detect(app, frame, min_score=0.6):
+    """Return boxes (N,4) and one normalised embedding per face."""
+    boxes, embeddings = [], []
     for face in app.get(frame):
-        x1, y1, x2, y2 = face.bbox.astype(int)
-        out.append((x1, y1, x2, y2, float(face.det_score)))
-    return out
+        if face.det_score < min_score:
+            continue
+        boxes.append(face.bbox)
+        embeddings.append(face.normed_embedding)
+    return np.array(boxes, dtype=float).reshape(-1, 4), embeddings
 
 
-def draw(frame, boxes, fps, every):
-    for x1, y1, x2, y2, track_id in boxes:
-        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 200, 0), 2)
-        cv2.putText(frame, f"ID {track_id}", (x1, max(y1 - 8, 15)),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 200, 0), 2, cv2.LINE_AA)
-    lines = [f"FPS: {fps:.1f}", f"Faces: {len(boxes)}", f"Detect every {every} frame(s)"]
+def draw(frame, labels, fps, every):
+    for (x1, y1, x2, y2), track_id, name, sim in labels:
+        color = RED if name == UNKNOWN else GREEN
+        cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+        text = f"{name} #{track_id} ({sim:.2f})"
+        cv2.putText(frame, text, (x1, max(y1 - 8, 15)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2, cv2.LINE_AA)
+    lines = [f"FPS: {fps:.1f}", f"Faces: {len(labels)}", f"Detect every {every} frame(s)"]
     for i, text in enumerate(lines):
         y = 28 + i * 26
         cv2.putText(frame, text, (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 4, cv2.LINE_AA)
@@ -44,20 +54,25 @@ def main():
     parser.add_argument("--camera", type=int, default=0, help="0 = default webcam")
     parser.add_argument("--every", type=int, default=3, help="run detection every N frames")
     parser.add_argument("--det-size", type=int, default=320)
+    parser.add_argument("--threshold", type=float, default=0.45)
+    parser.add_argument("--db", default="facevault.db")
     args = parser.parse_args()
 
-    print("Loading detector...")
-    app = load_detector(args.det_size)
+    print("Loading models...")
+    app = load_analyzer(args.det_size)
+    recognizer = Recognizer.from_db(args.db, threshold=args.threshold)
+    print(f"Known people: {', '.join(recognizer.names) or 'none (name someone in the app first)'}")
+    tracker = IoUTracker(iou_threshold=0.3, max_age=30)
 
     cap = cv2.VideoCapture(args.camera)
     if not cap.isOpened():
         raise SystemExit("Could not open the camera. Check camera permissions for your terminal.")
-    tracker = IoUTracker(iou_threshold=0.3, max_age=30)
-    boxes = []
+
+    labels = []
     fps = 0.0
     frame_idx = 0
     last = time.perf_counter()
-    print("Running. Press q in the video window to quit.")
+    print("Running. Press q to quit, r to reload names from the database.")
 
     try:
         while True:
@@ -65,24 +80,31 @@ def main():
             if not ok:
                 print("Camera stopped sending frames.")
                 break
-            frame = cv2.flip(frame, 1)  # mirror image, feels natural on a webcam
+            frame = cv2.flip(frame, 1)
 
-            # Detect every N frames; in between, keep showing the last boxes
             if frame_idx % args.every == 0:
-                dets = detect(app, frame)
-                tracks = tracker.update(np.array([d[:4] for d in dets], dtype=float))
-                boxes = [(*(int(v) for v in t.bbox), t.track_id) for t in tracks]
+                boxes, embeddings = detect(app, frame)
+                tracks = tracker.update(boxes, embeddings)
+                labels = []
+                for t in tracks:
+                    name, sim = recognizer.label(t.embeddings)
+                    bbox = tuple(int(v) for v in t.bbox)
+                    labels.append((bbox, t.track_id, name, sim))
             frame_idx += 1
 
             now = time.perf_counter()
             instant = 1.0 / max(now - last, 1e-6)
-            fps = instant if fps == 0 else 0.9 * fps + 0.1 * instant  # smoothed
+            fps = instant if fps == 0 else 0.9 * fps + 0.1 * instant
             last = now
 
-            draw(frame, boxes, fps, args.every)
+            draw(frame, labels, fps, args.every)
             cv2.imshow("FaceVault", frame)
-            if cv2.waitKey(1) & 0xFF == ord("q"):
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord("q"):
                 break
+            if key == ord("r"):
+                recognizer = Recognizer.from_db(args.db, threshold=args.threshold)
+                print(f"Reloaded. Known people: {', '.join(recognizer.names) or 'none'}")
     finally:
         cap.release()
         cv2.destroyAllWindows()

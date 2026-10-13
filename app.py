@@ -81,9 +81,13 @@ def remove_face(con, face_id):
 
 @st.cache_data(show_spinner=False)
 def face_thumb(path, x1, y1, x2, y2):
-    with Image.open(path) as img:
-        crop = img.convert("RGB").crop((x1, y1, x2, y2))
-    return crop.resize((THUMB, THUMB))
+    try:
+        with Image.open(path) as img:
+            crop = img.convert("RGB").crop((x1, y1, x2, y2))
+        return crop.resize((THUMB, THUMB))
+    except OSError:
+        return Image.new("RGB", (THUMB, THUMB), (200, 200, 200))
+
 
 
 @st.cache_data(show_spinner=False)

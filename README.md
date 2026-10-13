@@ -162,3 +162,30 @@ detections, so fast movement or a low frame rate can break a track, and two
 faces crossing can swap IDs. The standard fix is SORT: a Kalman filter predicts
 where each box will be in the next frame, and detections are matched against
 those predictions rather than the last known position.
+
+## Recognition
+
+The camera recognises the people named in the photo organizer, which is where
+the two halves of FaceVault connect.
+
+1. **Centroids.** For each named person, the average of their normalised photo
+   embeddings is computed and re-normalised into a single reference vector.
+2. **Similarity.** Each tracked face is compared with every centroid using
+   cosine similarity (a dot product, since all vectors are normalised).
+3. **Voting.** A track is labelled with a name only if a majority of its last
+   10 frames agree on that person with similarity ≥ 0.45, and at least 3 frames
+   have been seen. Otherwise it is shown as "Unknown". Voting across frames
+   stops the label flickering when a single frame is blurry or badly angled.
+
+Known people are drawn in green, unknown faces in red. Press `r` in the camera
+window to reload names after editing them in the app.
+
+| Case                        | Cosine similarity |
+|-----------------------------|-------------------|
+| Known person, facing camera | ~0.80             |
+| Known person, head turned   | ~0.XX             |
+| Strangers                   | ~0.03             |
+
+The threshold of 0.45 sits far from both groups, leaving margin for difficult
+angles and lighting. With recognition enabled the camera runs at about XX FPS
+(MacBook Air, CPU, detection every 3 frames).
