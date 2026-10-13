@@ -1,7 +1,8 @@
 """Phase 7: live webcam loop with face detection and an FPS counter."""
 import argparse
 import time
-
+import numpy as np
+from facevault.tracker import IoUTracker
 import cv2
 from insightface.app import FaceAnalysis
 
@@ -27,10 +28,10 @@ def detect(app, frame):
 
 
 def draw(frame, boxes, fps, every):
-    for x1, y1, x2, y2, score in boxes:
+    for x1, y1, x2, y2, track_id in boxes:
         cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 200, 0), 2)
-        cv2.putText(frame, f"{score:.2f}", (x1, max(y1 - 8, 15)),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 200, 0), 1, cv2.LINE_AA)
+        cv2.putText(frame, f"ID {track_id}", (x1, max(y1 - 8, 15)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 200, 0), 2, cv2.LINE_AA)
     lines = [f"FPS: {fps:.1f}", f"Faces: {len(boxes)}", f"Detect every {every} frame(s)"]
     for i, text in enumerate(lines):
         y = 28 + i * 26
@@ -51,7 +52,7 @@ def main():
     cap = cv2.VideoCapture(args.camera)
     if not cap.isOpened():
         raise SystemExit("Could not open the camera. Check camera permissions for your terminal.")
-
+    tracker = IoUTracker(iou_threshold=0.3, max_age=30)
     boxes = []
     fps = 0.0
     frame_idx = 0
@@ -68,7 +69,9 @@ def main():
 
             # Detect every N frames; in between, keep showing the last boxes
             if frame_idx % args.every == 0:
-                boxes = detect(app, frame)
+                dets = detect(app, frame)
+                tracks = tracker.update(np.array([d[:4] for d in dets], dtype=float))
+                boxes = [(*(int(v) for v in t.bbox), t.track_id) for t in tracks]
             frame_idx += 1
 
             now = time.perf_counter()

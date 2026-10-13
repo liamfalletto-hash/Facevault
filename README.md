@@ -119,3 +119,46 @@ Indexing is the bottleneck; clustering is effectively instant at this scale.
   fairer estimate.
 - A cluster needs at least 3 faces, so people with fewer photos are left as
   noise.
+
+  ## Live camera
+
+```bash
+python -m facevault.camera            # detect every 3 frames (default)
+python -m facevault.camera --every 1  # detect on every frame
+```
+
+Runs face detection on the webcam at a 320×320 detection size, which is much
+faster than the 640×640 used for photos and accurate enough at webcam
+distances. Detection runs every N frames and the last boxes are reused in
+between.
+
+| Setting               | FPS (MacBook Air, CPU) |
+|-----------------------|------------------------|
+| Detect every frame    | 15                     |
+| Detect every 3 frames | 30 (webcam maximum)    |
+
+Detecting on every frame costs about 65 ms per frame on CPU. Running detection
+every 3 frames doubles the frame rate to the webcam's 30 FPS cap, at the cost of
+boxes lagging slightly behind fast movement between detections.
+
+## Tracking
+
+Without tracking, every frame is analysed on its own: names flicker and one
+visitor could trigger hundreds of alerts. FaceVault's tracker (written from
+scratch in `facevault/tracker.py`) gives each face a stable ID across frames.
+
+1. Each frame, the IoU (overlap ratio) between every existing track and every
+   new detection is computed in one vectorised NumPy operation.
+2. The Hungarian algorithm (`scipy.optimize.linear_sum_assignment`) finds the
+   one-to-one assignment minimising total cost `1 - IoU`. Unlike greedy
+   matching, one track cannot take a detection another track needs more.
+3. Matches with IoU ≤ 0.3 are rejected. Unmatched detections start new tracks;
+   tracks unseen for more than 30 detection frames (about 3 s) are deleted.
+
+Covered by unit tests with synthetic moving boxes (`python -m pytest`).
+
+**Limitations and next step.** IoU matching assumes faces move little between
+detections, so fast movement or a low frame rate can break a track, and two
+faces crossing can swap IDs. The standard fix is SORT: a Kalman filter predicts
+where each box will be in the next frame, and detections are matched against
+those predictions rather than the last known position.
